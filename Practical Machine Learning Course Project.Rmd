@@ -1,0 +1,182 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "SP"
+date: "March 5, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Disclaimer: I understand that we were expected to limit the length of the assignment to 2000 words. I am not sure if I have been able to stay within limit but I found it necessary to explain some of the transformations required in order to develop the models and make the predictions.**
+
+## Introduction
+
+With a variety of fitness tracking devices available on the market, it is now possible to track a large number of variables for activity. One thing that has been studied is the quantity,i.e. how much a particular activity is done. However there isn't much done to track the quality of an activity. This project aims to explore this aspect of fitness tracking by looking at the data available here <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>
+
+##Exploratory Data Analysis
+
+This analysis looks at a weight liting dataset where six male participants with little weight lifting experience performed bicep curl for one set with 10 repititions. The participants were guided by an experienced instructor and had to perform bicep curls in 5 different fashions or classes. These classes are: <br>
+A - performing the exercise according to specification <br>
+B - throwing the elbows to the front <br>
+C - lifting the dumbell only halfway <br>
+D - lowering the dumbell only halfway <br>
+E - throwing the hips to the front <br>
+
+Their activities were tracked using four sensors mounted on the arm, forearm, belt and the dumbell. These activities manifest as variables in the dataset. Our goal is to predict the class from these variables. The data has already been split into a training and a test set.
+
+We now begin by loading the data and looking at its attributes.
+
+``` {r data explore}
+
+##setwd ("set the working directory accordingly")
+
+train <- read.csv("pml-training.csv")
+test <- read.csv("pml-testing.csv")
+
+str(train)
+
+```
+
+We see that there are a bunch of columns that have NAs in them. We could also argue that there are rows that have NAs in them. However if we remove the NAs based on the rows, then we only have 406 observations to work with but if we remove columns that are mostly NAs, then we still get 19622 observations and we have meaningful predictors that we can use in our model.
+
+Now on closer observation we also observe that some of the factor variables in the training dataset contain over 50 levels. Since the tree and randomforest methods that we intend to use here, do not accept such a high number of levels for the factor variables, we need to convert these variables to numeric. We will get to this later. First let us treat the NAs.
+
+``` {r Handling NAs in train set}
+train_1 <- na.omit(train)
+
+train_a <- train[, colSums(is.na(train)) == 0]
+
+ncol_train_a <- ncol(train_a)
+```
+
+We now have **`r ncol_train_a` variables** in the train set after removing columns that mostly contain NAs.
+
+We must however also consider the variables that can be used in the test set so that when we train our model, it has those variables available in the test set to later on make those predictions. We start this by again removing columns from the test set that mostly contain NAs.
+
+``` {r Handling NAs in test set}
+
+options(warn = -1)
+
+test_a <- test[, colSums(is.na(test)) == 0]
+
+ncol_test_a <- ncol(test_a)
+```
+
+We now notice that we have **`r ncol_test_a` variables** in the test set after removing columns that contain NAs.
+
+We now proceed to convert factor variables with over 50 levels to numeric in order to use the training algorithms later on.
+
+``` {r convert factors to numeric}
+for (i in 1: ncol(train_a)){
+        indx <- sapply(train_a, is.factor)
+        lev <- sapply(train_a[,sapply(train_a, is.factor)], nlevels)
+        if (nlevels(train_a[, i]) >40){
+                train_a[i] <- lapply(train_a[i], function(x) as.numeric(as.character(x)))
+        }
+}
+
+```
+We also have to reconcile the training and test sets so that we use the same 60 variables to build our training model.
+
+``` {r reconcile train and test sets}
+
+train_c <- train_a[, names(train_a) %in% names(test_a)]
+
+train_c$classe <- train_a$classe
+
+```
+
+The dataframe train_c does not have the "classe" variable that we require to make the predictions since this variable does not appear in the test_a data frame. So we need to add this column back to train_c which is what the last line above does.
+
+We now have a clean training data set that we can use to build our model.
+
+## Training the model using classification trees
+
+Here we will explore the training dataset and try to fit a model that can predict classe. We start by fitting a classification tree.
+``` {r classification tree model}
+
+library(tree)
+
+tree.train <- tree(classe~.-X -cvtd_timestamp, data = train_c)
+
+plot(tree.train)
+text(tree.train, pretty = 0)
+```
+
+**Figure 1**: Classification tree fit to the training data. We can see the first three most important predictors for classe.
+
+``` {r classification tree summary}
+
+summary(tree.train)
+```
+
+We see from the summary above that the misclassification error rate for the classification tree model is 17% and the number of terminal nodes used are 27.
+
+We can also use cross-validation to train the model as shown below
+
+``` {r classification tree with cross-validation}
+
+cv.train <- cv.tree(tree.train, FUN = prune.misclass)
+
+cv.train
+
+```
+
+We can see from above that the lowest error rate (noted by the dev variable) occurs for the case where we have 27 terminal nodes. This would most likely give us a model very similar to what we had before doing cross-validation since we had 27 terminal nodes in that case as well.
+
+Let us now proceed to build a prediction for class.
+
+``` {r prediction model using classification tree}
+
+tree.pred <- predict(tree.train, test_a, type = "class")
+
+tree.pred
+
+```
+Using these predictions on the quiz, we note that we only get a 50% accuracy. Let us now try to fit a random forest model.
+
+## Training the model using random forests
+
+We now move on to develop a random forest model. But we first need to make sure that we have the same number of levels for the factor variables in both the training and test datasets. This is a necessary step since if we try to predict without setting the same levels on all factor variables, the random forest algorithm gives us an error.
+
+``` {r random forests model}
+
+levels(test_a$new_window) <- levels(train_c$new_window)
+levels(test_a$cvtd_timestamp) <- levels(train_c$cvtd_timestamp)
+
+library(randomForest)
+rf.train <- randomForest(classe~.-X -cvtd_timestamp, data = train_c,importance = TRUE)
+
+summary(rf.train)
+
+```
+
+We can now look at the importance of the variables in the random forest model.
+
+``` {r importance of variables}
+
+varImpPlot(rf.train)
+
+```
+
+**Figure 2**: Plot showing the variable importance for the training data
+
+The first plot shows the mean decrease in accuracy of predictions on the out of bag samples when a given variable is excluded. We can see that the variable raw_timestamp_part_1 has a pretty significant influence on this measure. The second plot shows the decrease in node impurity due to a split over that variable averaged across all the trees.
+
+We can now finally fit the model to the test data to see how the predictions work out.
+
+``` {r random forest predictions}
+
+rf.pred <- predict(rf.train, test_a)
+
+rf.pred 
+
+```
+
+Using these predictions on the quiz we see that we are able to get a 100% accuracy indicating that the model has worked to a satisfactory level.
+
+**Note:**
+I'd like to thank the authors of the paper below for allowing us to use this dataset. <br>
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
